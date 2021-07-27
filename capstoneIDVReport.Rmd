@@ -1,0 +1,173 @@
+---
+title: "IDV Learner Capstone 2021"
+author: "Michael Jaeger"
+date: "7/27/2021"
+output:
+  pdf_document: 
+    toc: yes
+    fig_width: 7
+    fig_caption: yes
+    number_sections: yes
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Introduction
+
+This R markdown is the product of the Harvard edX Data Science Professional Certificate program Capstone. The Capstone course was designed from the course lectures on Machine Learning. The goal of the project is to build a machine learning algorithm that predicts a certain hours' load level classification based only on observations of price, congestion, dewpoint and air temperature.
+
+# Setup, Methods and Analysis
+
+There are minimal packages required to load into the R environment as noted in the p_load function.
+
+I created the dataset used for the analysis. It consist of hourly weather and integrated load values for hour ending 16 (3:00 - 3:59pm EST) for the New York City load zone in the New York Independent System Operator footprint. 
+
+The weather was scraped from NOAA using another script I have work purposes. I combined the weather data and load data in another script and created a csv file called "finaldata.csv", which is included in the github, and I have made it available as a google document.
+
+Initially, I wanted to run a time series forecast, but quickly realized that I was in over my head in that I hadn't studied this realm of machine learning yet. The data was not standardized. I then turned to classification, where I classified the load values into 5 bins based on the values: "High", "Med-high", "Med", "Med-low" and "Low". I trained on this classification.
+
+```{r}
+# Note: this process could take a couple of minutes
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(caret,data.table,recommenderlab,heatmaply,
+               tidyverse, tinytex,readr, tidyquant)
+
+
+rm(list=ls())
+
+# Load data
+data <- read_csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vTIjoOjq4Re7UioMhXRPSPK2XWx4I_Ehr07V1wprxio9GTMUARCcbf9jQcS7w5p0O4i7F-iLbwwB-d6/pub?output=csv", col_types = cols(date = col_date(format = "%Y-%m-%d")))
+```
+The supplied column names are not frinedly, lest change them.
+
+```{r}
+# Rename some columns for friendliness
+colnames(data)[3] <- "Price"
+colnames(data)[4] <- "Load"
+colnames(data)[5] <- "Congestion"
+```
+
+Lets look at the Hour 16 loads across NYC load zone.
+
+```{r}
+# visualize the dataset to predict on
+visualModelData <- data %>%
+      ggplot(aes(x = date, y = Load)) +
+      geom_point(alpha = 0.5, color = palette_light()[[1]]) +
+      labs(title = "NYC Load Values at HE 16", x = "Date") +
+      theme_tq()
+
+visualModelData
+```
+
+We need to classify the loads into categories.
+
+```{r}
+# Classify the load levels into 5 bins, High, med-high, med, med-low, low
+data$loadClass <- ifelse(data$Load > 9500,"High",
+                     ifelse(data$Load > 7500 & data$Load <= 9500,"Med-high",
+                            ifelse(data$Load > 6200 & data$Load <= 7500, "Normal",
+                                   ifelse(data$Load > 5000 & data$Load <= 6200, "Med-Low",
+                                          ifelse(data$Load > 3800 & data$Load <= 5000, "Low","")))))
+```
+
+Grab the columns we need:
+
+```{r}
+# Select the final variables for the training set
+data <- data %>%
+      select(Price, Load, Congestion, Air_Temp, Dewpoint,loadClass)
+```
+
+## Methods and Analysis
+
+Split into test and train datasets, first set seed:
+
+```{r}
+# Split data into a test index, then into training and test sets
+set.seed(1972)
+test_index <- createDataPartition(y = data$loadClass, times = 1, p = 0.1, list = FALSE)
+train <- data[-test_index, ]
+test <- data[test_index, ]
+```
+
+Now to set the control parameters to cross validate 10 and set metric to accuracy.
+
+```{r}
+# Set up the models to use 10-fold cross validation and Accuracy metrics
+control <- trainControl(method="cv", number=10)
+metric <- "Accuracy"
+```
+
+Run the five models chosen for classification, LDA, Cart, KNN, SVM, RF:
+
+```{r}
+# 1 - linear algorithm
+set.seed(1972)
+lda <- train(loadClass~., data=train, method="lda", metric=metric, trControl=control)
+
+# 2 - nonlinear algorithm
+set.seed(1972)
+cart <- train(loadClass~., data=train, method="rpart", metric=metric, trControl=control)
+
+# 3 - kernel nearest neighbor
+set.seed(1972)
+knn <- train(loadClass~., data=train, method="knn", metric=metric, trControl=control)
+
+# 4 - SVM
+set.seed(1972)
+svm <- train(loadClass~., data=train, method="svmRadial", metric=metric, trControl=control)
+
+# 5 - Random Forest
+set.seed(1972)
+rf <- train(loadClass~., data=train, method="rf", metric=metric, trControl=control)
+```
+# Results
+
+Now it's time show the results of the models.
+
+```{r}
+
+# summarize accuracy of models
+results <- resamples(list(lda=lda, cart=cart, knn=knn, svm=svm, rf=rf))
+# Show results
+summary(results)
+```
+
+KNN has the highest mean accuracy value of .9791, but it is difficult to see the best outcome in the table. Lets plot it:
+```{r}
+# Hard to tell from table, lets visualize the results in a dotplot
+dotplot(results)
+```
+Now we have our best model, lets see the summary:
+
+```{r}
+# summarize Best Model
+print(knn)
+
+
+```
+
+
+Let's make our predictions against the hold-out set:
+
+```{r}
+# Now that we have our model, lets predict using the test set
+predictions <- predict(knn, test)
+```
+
+A confustion matrix is ideal for showing the results of the predictions.
+
+```{r}
+#Show results of predictions against validation/hold-out set.
+confusionMatrix(predictions, factor(test$loadClass))
+```
+
+
+# Conclusions
+
+The model had an easy time of predicting the classification due to the variables chosen in the data. All of these variables have a high correlation to the load value. For a more 'fair' test, a larger sample size should have been made, and had variables that had less correlation such as wind direction. Unfortunately there were personal constraints that kept me from spending more time on the dataset creation. 
